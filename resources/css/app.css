@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.rdt_Pagination .sc-bHCmUC + svg {
+    display: none !important;
+}
+
+
+/* Center align table data */
+.rdt_TableCell {
+    text-align: center !important;
+    justify-content:center !important;
+    
+  }
+  /* Center align all table headers */
+  .rdt_TableHeadRow div {
+    text-align: center !important;
+    justify-content: center !important;
+    --tw-bg-opacity: 1;
+    background-color: rgb(243 244 246 / var(--tw-bg-opacity, 1));
+    font-size: 14px;
+    color: rgba(0, 0, 0, 0.87);
+    font-weight: bold;
+    font-family: Figtree, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  }

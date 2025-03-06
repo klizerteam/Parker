@@ -36,8 +36,6 @@ class ParkerService {
 
         $data = $response->json();
         return $data;
-        // Extract only the 'content' key if it exists
-        // return $data['content'] ?? $data;
     }
     public function getProductImage($sku) {
         $skuValue = $this->sanitizeString($sku);

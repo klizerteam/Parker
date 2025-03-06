@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Bus;
 use Mail;
 use App\Mail\SyncFailMail;  
 use Illuminate\Http\Request;
-
+use Illuminate\Support\Facades\Http;
 
     class IntegrationController extends Controller {
         private $akeneoService;
@@ -92,12 +92,12 @@ use Illuminate\Http\Request;
                 $batchLog = BatchSyncLog::create([
                     'sync_log_id' => $syncLog->id,
                     'batch_number' => $batchNumber + 1,
-                    'batch_product_count'=>count($batch),
+                    'batch_product_count'=> count($batch),
                     'status' => 'processing',
                     'processed_count' => 0,
                     'failure_count' => 0,
                 ]);
-               $jobs[] = ProcessProductSync::dispatch($batch, $syncLog->id, $batchLog->id,$this->logFilePath,$this->errorlogFilePath,$batchLog);
+               $jobs[] = ProcessProductSync::dispatch($batch, $syncLog->id, $batchLog->id,$this->logFilePath,$this->errorlogFilePath,$batchLog)->onQueue('alpha');
             }
             return response()->json(['message' => 'Product sync initiated with batches.','status'=>'success']);
         }
@@ -109,17 +109,11 @@ use Illuminate\Http\Request;
             $this->logFilePath = $logFilePath;
             $this->errorlogFilePath = $errorlogFilePath;
 
-            // $this->addLogEntry($logFilePath,$errorlogFilePath, "Sync started", 'INFO');
-            //      if (AkeneoParkerSyncLog::where('status', 'processing')->exists()) {
-            //     $this->addLogEntry($logFilePath,$errorlogFilePath, "A sync is already in progress", 'ERROR');
-            //     return response()->json(['message' => 'A sync is already in progress.','status'=>'error'], 200);
-            // }
-
-            // $lastSync = AkeneoParkerSyncLog::orderBy('created_at', 'desc')->first();
-            // if ($lastSync && in_array($lastSync->status, ['processing', 'failed'])) {
-            //     $this->addLogEntry($logFilePath,$errorlogFilePath, "Previous sync failed or is still running", 'ERROR');
-            //     return response()->json(['message' => 'Previous sync failed or is still running.','status'=>'error'], 200);
-            // }
+            $this->addLogEntry($logFilePath,$errorlogFilePath, "Sync started", 'INFO');
+                 if (AkeneoParkerSyncLog::where('status', 'processing')->exists()) {
+                $this->addLogEntry($logFilePath,$errorlogFilePath, "A sync is already in progress", 'ERROR');
+                return response()->json(['message' => 'A sync is already in progress.','status'=>'error'], 200);
+            }
            
             $syncLog = AkeneoParkerSyncLog::create([
                 'connection_id' => 1,
@@ -217,10 +211,54 @@ use Illuminate\Http\Request;
             ]);
         }
 
-        public function loadSKU(){
-            $response = $this->akeneoService->fetchParkerProduct();
+        public function loadSKU(Request $request){
+            // Validate the request (ensure 'query' is provided)
+                $request->validate([
+                    'query' => 'nullable|string|min:3', // Only fetch if at least 3 chars are typed
+                    'page' => 'nullable|integer|min:1',
+                    'items_per_page' => 'nullable|integer|min:1|max:100',
+                ]);
 
-            $products = $response->original['parkerList'] ?? [];
-            return response()->json(["skus" => $products]);
+                // Retrieve Akeneo credentials from .env
+                $akeneoUrl = env('AKENEO_URL');
+                $accessToken = $this->akeneoService->getAccessToken(); 
+
+                if (!$akeneoUrl || !$accessToken) {
+                    return response()->json(['error' => 'Missing Akeneo credentials'], 500);
+                }
+
+                // Extract search term from request
+                $searchTerm = $request->input('query', '');
+                $page = $request->input('page', 1);
+                $itemsPerPage = $request->input('items_per_page', 10);
+
+                // Construct search filter
+                $searchFilters = [
+                    'Parker_Product' => [['operator' => 'NOT EMPTY', 'value' => '']],
+                ];
+
+                // If query exists, add SKU identifier filter
+                if (!empty($searchTerm)) {
+                    $searchFilters['identifier'] = [['operator' => 'CONTAINS', 'value' => $searchTerm]];
+                }
+
+                try {
+                    // Call Akeneo API
+                    $response = Http::withToken($accessToken)->get("$akeneoUrl/api/rest/v1/products-uuid", [
+                        'search' => json_encode($searchFilters),
+                        'page' => $page,
+                        'items_per_page' => $itemsPerPage,
+                    ]);
+
+                    // Check if request was successful
+                    if ($response->failed()) {
+                        return response()->json(['error' => 'Failed to fetch SKUs', 'details' => $response->json()], 500);
+                    }
+
+                    // Return SKUs to React frontend
+                    return response()->json($response->json());
+                } catch (\Exception $e) {
+                    return response()->json(['error' => 'Exception occurred', 'message' => $e->getMessage()], 500);
+                }
+            }
         }
-    }   

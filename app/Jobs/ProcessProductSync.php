@@ -59,17 +59,20 @@ class ProcessProductSync implements ShouldQueue
             if (empty($this->products)) {
                 $this->addLogEntry($logFilePath,$errorlogFilePath, "No products found - 404 ", 'ERROR');  
             }
-            $totalProducts = count($this->products);          
-            
+
+            $totalProducts = count($this->products);  
+
             foreach ($this->products as $sku) {
                 try {
                     $product = $parkerService->getProductDetails($sku); 
                     if(!isset($product['technical']) && !isset($product['divisionId']) && !isset($product['marketing'])){
                         if(!isset($product['part'])){
-                            $this->addLogEntry($logFilePath,$errorlogFilePath, "No Information: {$sku} - ", 'WARNING');
+                            $this->addLogEntry($logFilePath,$errorlogFilePath, "No Information: {$sku} - ", 'INFO');
+                            $batchLog->increment('processed_count');
                             continue;
                         }else{
-                            $this->addLogEntry($logFilePath,$errorlogFilePath, "No Information: {$sku} - " , 'WARNING');
+                            $this->addLogEntry($logFilePath,$errorlogFilePath, "No Information: {$sku} - " , 'INFO');
+                            $batchLog->increment('processed_count');
                             continue;
                         }
                     }
@@ -98,7 +101,7 @@ class ProcessProductSync implements ShouldQueue
 
     private function processProduct($product, $sku, BatchSyncLog $syncLog, $logFilePath,$errorlogFilePath,AkeneoService $akeneoService, ParkerService $parkerService)
     {
-         /* Dynamic Image Creation Start */
+        /* Dynamic Image Creation Start */
         $this->addLogEntry($logFilePath,$errorlogFilePath, "Processing Image for SKU: {$sku}", 'INFO');
         $getImage = $parkerService->getProductImage($sku);
         try {
@@ -121,7 +124,10 @@ class ProcessProductSync implements ShouldQueue
 
         if(!empty($category)){
             $categoryName = array_column($category, 'name');
-            $this->categoryGenerator($category, $sku, $akeneoService,$parkerService);
+            $categoryResponce = $this->categoryGenerator($category, $sku, $akeneoService,$parkerService);
+            foreach($categoryResponce as $errorResponce){
+                $this->addLogEntry($logFilePath,$errorlogFilePath, $errorResponce, 'ERROR');
+            }
             $familyName = end($categoryName);
         }
         else{
@@ -131,20 +137,25 @@ class ProcessProductSync implements ShouldQueue
         /* Dynamic Category Creation Ends */
 
 
-
         /* Dynamic Family Creation Start */
         $this->addLogEntry($logFilePath,$errorlogFilePath, "Processing Family for SKU: {$sku}", 'INFO');
-        $this->familyGenerator($familyName, $sku, $akeneoService,$parkerService);
+        $familyResponce = $this->familyGenerator($familyName, $sku, $akeneoService,$parkerService);
+        foreach($familyResponce as $errorResponce){
+            $this->addLogEntry($logFilePath,$errorlogFilePath, $errorResponce, 'ERROR');
+        }
         $this->addLogEntry($logFilePath,$errorlogFilePath, "Family Processing Completed for SKU: {$sku}", 'INFO');
         /* Dynamic Family Creation End */
 
         $familyCode = $this->sanitizeString($familyName);
         
         /* Default Attributes Creation Start */
-            $this->addLogEntry($logFilePath, $errorlogFilePath, "Processing Default Attributes for SKU: {$sku}", 'INFO');
-            
-            $this->defaultAttributeGenerator($product, $sku, $familyCode, $akeneoService,$parkerService);
-            $this->addLogEntry($logFilePath, $errorlogFilePath , "Attributes Processing Completed for SKU: {$sku}", 'INFO');
+        $this->addLogEntry($logFilePath, $errorlogFilePath, "Processing Default Attributes for SKU: {$sku}", 'INFO');
+        
+        $defaultAttributeResponce = $this->defaultAttributeGenerator($product, $sku, $familyCode, $akeneoService,$parkerService);
+        foreach($defaultAttributeResponce as $errorResponce){
+            $this->addLogEntry($logFilePath,$errorlogFilePath, $errorResponce, 'ERROR');
+        }
+        $this->addLogEntry($logFilePath, $errorlogFilePath , "Attributes Processing Completed for SKU: {$sku}", 'INFO');
         /* Default Attributes Creation End */
 
 
@@ -155,10 +166,12 @@ class ProcessProductSync implements ShouldQueue
             $definingParts = array_key_exists('defining', $product['technical']) && isset($product['technical']['defining']['part']) ? $product['technical']['defining']['part'] : [];
             $parts = array_merge($descriptiveParts, $definingParts); 
         }
-        $this->attributeGenerator($parts, $familyCode, $sku, $akeneoService,$parkerService);
+        $attributeResponce = $this->attributeGenerator($parts, $familyCode, $sku, $akeneoService,$parkerService);
+        foreach($attributeResponce as $errorResponce){
+            $this->addLogEntry($logFilePath,$errorlogFilePath, $errorResponce, 'ERROR');
+        }
         $this->addLogEntry($logFilePath,$errorlogFilePath, "Attributes Processing Completed for SKU: {$sku}", 'INFO');
         /* Dynamic Attributes Creation End */
-
 
         $syncLog->increment('processed_count');
     }
@@ -167,108 +180,140 @@ class ProcessProductSync implements ShouldQueue
 
         $updatedCategoryCode = [];
         
-        // Extract only the 'name' values
         $categoryName = array_column($categoryTree, 'name');
 
         $defaultParentCategory = 'shop_by_category';
 
-        foreach($categoryName as $category){
-            $categoryCode = $this->sanitizeString($category);
+        $errorMessageArr = [];
 
-            array_push($updatedCategoryCode, $categoryCode);
+        try{
+            foreach($categoryName as $category){
+                $categoryCode = $this->sanitizeString($category);
+                array_push($updatedCategoryCode, $categoryCode);
+                $parentCategory = Arr::first($categoryName) == $category ? $defaultParentCategory : $this->sanitizeString(Arr::first($categoryName));
 
-            $parentCategory = Arr::first($categoryName) == $category ? $defaultParentCategory : $this->sanitizeString(Arr::first($categoryName));
+                // Step 1: Check if category exists
+                $categoriesResponse = $akeneoService->fetchCategories($categoryCode);
 
-            // Step 1: Check if category exists
-            $categoriesResponse = $akeneoService->fetchCategories($categoryCode);
-
-            if ($categoriesResponse['code'] === 404) {
-                // Step 2: Create category if it doesn't exist
-                $createCategoryResponse = $akeneoService->createCategories($parentCategory, $categoryCode, $category);
+                if ($categoriesResponse['code'] === 404) {
+                    // Step 2: Create category if it doesn't exist
+                    $createCategoryResponse = $akeneoService->createCategories($parentCategory, $categoryCode, $category);
+                    if(!is_null($createCategoryResponse)){
+                            array_push($errorMessageArr,$createCategoryResponse['message']);
+                    }
+                }
             }
-            
+
+            // Step 3: Assign category to product
+            $updateProductCategoryResponse = $akeneoService->updateProductCategories($productIdentifier, $updatedCategoryCode);
+
+            if(!is_null($updateProductCategoryResponse)){
+                array_push($errorMessageArr,$updateProductCategoryResponse['message']);
+            }
         }
-        // Step 3: Assign category to product
-        $updateProductCategoryResponse = $akeneoService->updateProductCategories($productIdentifier, $updatedCategoryCode);
+        catch (\Exception $e) {
+                array_push($errorMessageArr,$e->getMessage());
+        }
+        return $errorMessageArr;
     }
 
     private function familyGenerator($familyName, $productIdentifier,AkeneoService $akeneoService, ParkerService $parkerService){
     
         $familyCode = $this->sanitizeString($familyName);
+        $errorMessageArr = [];
+        try{
+            // Step 1: Check if Family exists
+            $familyResponse = $akeneoService->fetchFamily($familyCode);
+                if ($familyResponse['code'] === 404) {
+                    // Step 2: Create Family if it doesn't exist
+                    $createFamilyResponse = $akeneoService->createFamilies($familyCode, $familyName);
+                    if(!is_null($createFamilyResponse)){
+                            array_push($errorMessageArr,$createFamilyResponse['message']);
+                    }
+                }
 
-        // Step 1: Check if Family exists
-        $familyResponse = $akeneoService->fetchFamily($familyCode);
-
-            if ($familyResponse['code'] === 404) {
-                // Step 2: Create Family if it doesn't exist
-                $createFamilyResponse = $akeneoService->createFamilies($familyCode, $familyName);
+            // Step 3: Assign Family to product
+            $updateProductFamilyResponse = $akeneoService->updateProductFamily($productIdentifier, $familyCode);
+            if(!is_null($updateProductFamilyResponse)){
+                array_push($errorMessageArr,$updateProductFamilyResponse['message']);
             }
-
-        // Step 3: Assign Family to product
-        $updateProductFamilyResponse = $akeneoService->updateProductFamily($productIdentifier, $familyCode);
+        }catch (\Exception $e) {
+                array_push($errorMessageArr,$e->getMessage());
+        }
+        return $errorMessageArr;
     }
 
     public function defaultAttributeGenerator($product, $productIdentifier, $familyCode,AkeneoService $akeneoService, ParkerService $parkerService)
     {
         $attributeGroupCode = 'parker_attributes';
+        $errorMessageArr = [];
+        try{
 
-        $attributeGroupResponse = $akeneoService->fetchAttributeGroup($attributeGroupCode);
+            $attributeGroupResponse = $akeneoService->fetchAttributeGroup($attributeGroupCode);
 
-        if(isset($product['product_series'])){
-            $product['product_series_id'] = array_key_exists('id', $product['product_series']) && isset($product['product_series']['id']) ? $product['product_series']['id'] : '';
-        
-            $product['product_series_url'] = array_key_exists('url', $product['product_series']) ? $product['product_series']['url'] : '';
-
-            $product['product_series_code'] = array_key_exists('code', $product['product_series']) ? $product['product_series']['code'] : '';
-        }
-        if(isset($product['marketing'])){
-            $product['part_short_description'] = array_key_exists('part', $product['marketing']) ? $product['marketing']['part']['short_description'] : '';
-
-            $product['part_long_description'] = array_key_exists('part', $product['marketing']) ? $product['marketing']['part']['long_description'] : '';
-
-            $product['product_series_short_description'] = array_key_exists('product_series', $product['marketing']) ? $product['marketing']['product_series']['short_decription'] : '';
-
-            $product['product_series_long_description'] = array_key_exists('product_series', $product['marketing']) ? $product['marketing']['product_series']['long_decription'] : '';
-
-            $product['product_series_name'] = array_key_exists('product_series', $product['marketing']) ? $product['marketing']['product_series']['name'] : '';
-
-            if(array_key_exists('part', $product['marketing']) && isset($product['marketing']['part']['images']['full'])){
-                $fullImage = 'https:'.$product['marketing']['part']['images']['full'];
-            }
-            if(array_key_exists('part', $product['marketing']) && isset($product['marketing']['part']['support_assets'])){
-                $supportAssets = json_encode($product['marketing']['part']['support_assets']);
-            }
-
-            $product['marketing_product_image'] = isset($fullImage) ? $fullImage : '';
-            $product['support_assets'] = isset($supportAssets) ? $supportAssets : '';
-            $product['part_url'] = isset($product['part']) ? $product['part'] : '';
-            $product['division_id'] = isset($product['divisionId']) ? $product['divisionId'] : '';
-
-        }
-
-
-        $attributesData = [];
-
-        foreach($attributeGroupResponse['attributes'] as $attributeCode){
+            if(isset($product['product_series'])){
+                $product['product_series_id'] = array_key_exists('id', $product['product_series']) && isset($product['product_series']['id']) ? $product['product_series']['id'] : '';
             
-            $attributesData[$attributeCode] = [
-            [
-                "locale" => null,
-                "scope" => null,
-                "data" => $product[$attributeCode]
-            ]
-        ];
+                $product['product_series_url'] = array_key_exists('url', $product['product_series']) ? $product['product_series']['url'] : '';
+
+                $product['product_series_code'] = array_key_exists('code', $product['product_series']) ? $product['product_series']['code'] : '';
+            }
+            if(isset($product['marketing'])){
+                $product['part_short_description'] = array_key_exists('part', $product['marketing']) ? $product['marketing']['part']['short_description'] : '';
+
+                $product['part_long_description'] = array_key_exists('part', $product['marketing']) ? $product['marketing']['part']['long_description'] : '';
+
+                $product['product_series_short_description'] = array_key_exists('product_series', $product['marketing']) ? $product['marketing']['product_series']['short_decription'] : '';
+
+                $product['product_series_long_description'] = array_key_exists('product_series', $product['marketing']) ? $product['marketing']['product_series']['long_decription'] : '';
+
+                $product['product_series_name'] = array_key_exists('product_series', $product['marketing']) ? $product['marketing']['product_series']['name'] : '';
+
+                if(array_key_exists('part', $product['marketing']) && isset($product['marketing']['part']['images']['full'])){
+                    $fullImage = 'https:'.$product['marketing']['part']['images']['full'];
+                }
+                if(array_key_exists('part', $product['marketing']) && isset($product['marketing']['part']['support_assets'])){
+                    $supportAssets = json_encode($product['marketing']['part']['support_assets']);
+                }
+
+                $product['marketing_product_image'] = isset($fullImage) ? $fullImage : '';
+                $product['support_assets'] = isset($supportAssets) ? $supportAssets : '';
+                $product['part_url'] = isset($product['part']) ? $product['part'] : '';
+                $product['division_id'] = isset($product['divisionId']) ? $product['divisionId'] : '';
+            }
+
+            $attributesData = [];
+
+            foreach($attributeGroupResponse['attributes'] as $attributeCode){
+                
+                $attributesData[$attributeCode] = [
+                    [
+                        "locale" => null,
+                        "scope" => null,
+                        "data" => $product[$attributeCode]
+                    ]
+                ];
+            }
+
+            // Assign attributes to family
+            $familyPayload = [
+                "attributes" => $attributeGroupResponse['attributes']
+            ];
+
+            $attributeFamilyResponse = $akeneoService->updateFamilyAttribute($familyCode, $familyPayload);
+            if(!is_null($attributeFamilyResponse)){
+                array_push($errorMessageArr,$attributeFamilyResponse['message']);
+            }
+
+            // Update product attribute value
+            $attributeProductResponse = $akeneoService->updateProductAttribute($productIdentifier, $attributesData);
+            if(!is_null($attributeProductResponse)){
+                array_push($errorMessageArr,$attributeProductResponse['message']);
+            }
+        }catch (\Exception $e) {
+                array_push($errorMessageArr,$e->getMessage());
         }
-
-        // Assign attributes to family
-        $familyPayload = [
-            "attributes" => $attributeGroupResponse['attributes']
-        ];
-
-        $attributeFamilyResponse = $akeneoService->updateFamilyAttribute($familyCode, $familyPayload);
-
-        // Update product attribute value
-        $akeneoService->updateProductAttribute($productIdentifier, $attributesData);
+        return $errorMessageArr;
 
     }
 
@@ -278,98 +323,116 @@ class ProcessProductSync implements ShouldQueue
 
         $attributeGroup = 'technical';
 
-        foreach ($parts as $part) {
-          $key = array_search($part['attributeName'], array_column($uniqeAttributeArray , 'attributeName'));
-          if ($key === false) {
-              array_push($uniqeAttributeArray, $part);
-          }else { 
-                if($uniqeAttributeArray[$key]['value'] != $part['value']){
-                  $uniqeAttributeArray[$key]['value'] .= ",". $part['value'];
+        $errorMessageArr = [];
+        try{
+            foreach ($parts as $part) {
+              $key = array_search($part['attributeName'], array_column($uniqeAttributeArray , 'attributeName'));
+              if ($key === false) {
+                  array_push($uniqeAttributeArray, $part);
+              }else { 
+                    if($uniqeAttributeArray[$key]['value'] != $part['value']){
+                      $uniqeAttributeArray[$key]['value'] .= ",". $part['value'];
+                    }
+              }
+            }
+
+            $attributeCodes = [];
+            $attributesData = [];
+            foreach ($uniqeAttributeArray as $attribute) {
+                $attributeCode = $this->sanitizeString($attribute['attributeName']);
+                $attributeName = $attribute['attributeName'];
+                $values = explode(',', $attribute['value']); 
+                $isMultiSelect = count($values) > 1;
+
+                $attributeType = "pim_catalog_multiselect";
+                
+                // Create the attribute
+                $attributePayload = [
+                    "code" => $attributeCode,
+                    "type" => $attributeType,
+                    "group" => $attributeGroup,
+                    "labels" => [
+                        "en_US" => $attributeName
+                    ]
+                ];
+
+                // Step 1: Check if attribute exists
+                $attributeResponse = $akeneoService->fetchAttribute($attributeCode);
+
+                if ($attributeResponse['code'] === 404) {
+                    // Step 2: Create Attribute if it doesn't exist
+                     $createAttributeResponse = $akeneoService->createAttributes($attributePayload);
+                     if(!is_null($createAttributeResponse)){
+                        array_push($errorMessageArr,$createAttributeResponse['message']);
+                    }
                 }
-          }
-        }
 
-        $attributeCodes = [];
-        $attributesData = [];
-        foreach ($uniqeAttributeArray as $attribute) {
 
-            $attributeCode = $this->sanitizeString($attribute['attributeName']);
-            $attributeName = $attribute['attributeName'];
-            $values = explode(',', $attribute['value']); 
-            $isMultiSelect = count($values) > 1;
+                // Store attribute for family assignment
+                $attributeCodes[] = $attributeCode;
+               
+                $optionCodes = [];
 
-            $attributeType = "pim_catalog_multiselect";
-            
-            // Create the attribute
-            $attributePayload = [
-                "code" => $attributeCode,
-                "type" => $attributeType,
-                "group" => $attributeGroup,
-                "labels" => [
-                    "en_US" => $attributeName
-                ]
+                // Add options dynamically
+                foreach ($values as $value) {
+                    $value = trim($value);
+                    $optionCode = $this->sanitizeString($value);
+
+                    $optionPayload = [
+                        "code" => $optionCode,
+                        "attribute" => $attributeCode,
+                        "labels" => [
+                            "en_US" => $value
+                        ]
+                    ];
+
+                    // Step 1: Check if attribute option exists
+                    $attributeOptionResponse = $akeneoService->fetchAttributeOption($attributeCode, $optionCode);
+
+                    if ($attributeOptionResponse['code'] === 404) {
+                        // Step 2: Create Attribute Option if it doesn't exist
+                        $createAttributeOptionResponse = $akeneoService->createAttributeOptions($attributeCode, $optionPayload);
+                        if(!is_null($createAttributeOptionResponse)){
+                            array_push($errorMessageArr,$createAttributeOptionResponse['message']);
+                        }
+                    }
+
+                    if (!in_array($optionCode, $optionCodes)) {
+                        $optionCodes[] = $optionCode; // Store for product update
+                    }
+
+                    $attributesData[$attributeCode] = [
+                        [
+                            "locale" => null,
+                            "scope" => null,
+                            "data" => $optionCodes
+                        ]
+                    ];
+                    
+                }
+            }
+
+            // Assign attributes to family
+            $familyPayload = [
+                "attributes" => $attributeCodes
             ];
 
-            // Step 1: Check if attribute exists
-            $attributeResponse = $akeneoService->fetchAttribute($attributeCode);
+            $attributeFamilyResponse = $akeneoService->updateFamilyAttribute($familyCode, $familyPayload);
 
-            if ($attributeResponse['code'] === 404) {
-                // Step 2: Create Attribute if it doesn't exist
-                 $createAttributeResponse = $akeneoService->createAttributes($attributePayload);
+            if(!is_null($attributeFamilyResponse)){
+                array_push($errorMessageArr,$attributeFamilyResponse['message']);
             }
 
+            // Update product attribute value
+            $attributeProductResponse = $akeneoService->updateProductAttribute($productIdentifier, $attributesData);
 
-            // Store attribute for family assignment
-            $attributeCodes[] = $attributeCode;
-           
-            $optionCodes = [];
-
-            // Add options dynamically
-            foreach ($values as $value) {
-                $value = trim($value);
-                $optionCode = $this->sanitizeString($value);
-
-                $optionPayload = [
-                    "code" => $optionCode,
-                    "attribute" => $attributeCode,
-                    "labels" => [
-                        "en_US" => $value
-                    ]
-                ];
-
-                // Step 1: Check if attribute option exists
-                $attributeOptionResponse = $akeneoService->fetchAttributeOption($attributeCode, $optionCode);
-
-                if ($attributeOptionResponse['code'] === 404) {
-                    // Step 2: Create Attribute Option if it doesn't exist
-                    $createAttributeOptionResponse = $akeneoService->createAttributeOptions($attributeCode, $optionPayload);
-                }
-
-                if (!in_array($optionCode, $optionCodes)) {
-                    $optionCodes[] = $optionCode; // Store for product update
-                }
-
-                 $attributesData[$attributeCode] = [
-                    [
-                        "locale" => null,
-                        "scope" => null,
-                        "data" => $optionCodes
-                    ]
-                ];
-
-                
+            if(!is_null($attributeProductResponse)){
+                array_push($errorMessageArr,$attributeProductResponse['message']);
             }
+        }catch (\Exception $e) {
+                array_push($errorMessageArr,$e->getMessage());
         }
-
-        // Assign attributes to family
-        $familyPayload = [
-            "attributes" => $attributeCodes
-        ];
-
-        $attributeFamilyResponse = $akeneoService->updateFamilyAttribute($familyCode, $familyPayload);
-
-        // Update product attribute value
-        $akeneoService->updateProductAttribute($productIdentifier, $attributesData);
+        return $errorMessageArr;
     }  
     protected function checkAndUpdateSyncStatus(AkeneoParkerSyncLog $syncLog, $logFilePath,$errorlogFilePath)
     {
@@ -403,14 +466,11 @@ class ProcessProductSync implements ShouldQueue
     }
     
     private function sanitizeString($input) {
-        
+
         $output = preg_replace('/[^a-zA-Z0-9]+/', '_', $input);
-
         $output = trim($output, '_');
-
         $output = strtolower($output);
-
         return $output;
     }
-   
+
 }

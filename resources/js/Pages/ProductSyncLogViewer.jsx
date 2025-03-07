@@ -251,48 +251,48 @@ const SyncLogViewer = () => {
   const [skus, setSkus] = useState([]);
   const [selectedSku, setSelectedSku] = useState(""); // Selected SKU
 
-  const handleSubmit = async () => {
-    try {
-      const res = await axios.post("/api/syncPerProduct", { data: selectedSku });
-      setResponse(res.data.message);
-      setInputValue("");
-      fetchSyncLogs();
-    } catch (error) {
-      console.error("Error submitting data:", error);
-      setResponse("Submission failed.");
-    }
-  };
+  // const handleSubmit = async () => {
+  //   try {
+  //     const res = await axios.post("/api/syncPerProduct", { data: selectedSku });
+  //     setResponse(res.data.message);
+  //     setInputValue("");
+  //     fetchSyncLogs();
+  //   } catch (error) {
+  //     console.error("Error submitting data:", error);
+  //     setResponse("Submission failed.");
+  //   }
+  // };
 
   const [searchTerm, setSearchTerm] = useState("");
   const [options, setOptions] = useState([]);
 
-  const fetchSkus = async () => {
-    try {
-      const response = await fetch(
-        `/api/loadsku?query=${searchTerm}&page=1&items_per_page=10`
-      );
-      const data = await response.json();
+  // const fetchSkus = async () => {
+  //   try {
+  //     const response = await fetch(
+  //       `/api/loadsku?query=${searchTerm}&page=1&items_per_page=10`
+  //     );
+  //     const data = await response.json();
 
-      const extractedSkus = data._embedded.items.map((item) => ({
-        value: item.values?.sku?.[0]?.data || "Unknown SKU",
-        label: item.values?.sku?.[0]?.data || "Unknown SKU",
-      }));
+  //     const extractedSkus = data._embedded.items.map((item) => ({
+  //       value: item.values?.sku?.[0]?.data || "Unknown SKU",
+  //       label: item.values?.sku?.[0]?.data || "Unknown SKU",
+  //     }));
 
-      console.log("Extracted SKUs:", extractedSkus);
-      setOptions(extractedSkus);
-    } catch (error) {
-      console.error("Error fetching SKUs:", error);
-    } 
-  };
+  //     console.log("Extracted SKUs:", extractedSkus);
+  //     setOptions(extractedSkus);
+  //   } catch (error) {
+  //     console.error("Error fetching SKUs:", error);
+  //   } 
+  // };
 
-  useEffect(() => {
-    if (searchTerm.length < 3) {
-      setOptions([]);
-      return;
-    }
-  const delayDebounce = setTimeout(fetchSkus, 500); // Now fetchSkus is recognized
-  return () => clearTimeout(delayDebounce);
-  }, [searchTerm]);
+  // useEffect(() => {
+  //   if (searchTerm.length < 3) {
+  //     setOptions([]);
+  //     return;
+  //   }
+  // const delayDebounce = setTimeout(fetchSkus, 500); // Now fetchSkus is recognized
+  // return () => clearTimeout(delayDebounce);
+  // }, [searchTerm]);
 
 
    // Fetch product details when an SKU is selected
@@ -449,7 +449,7 @@ const SyncLogViewer = () => {
           </button>
           {message && <><Message key={message} status={message.status} message={message.message} /></> }
         </h2>
-          <div>
+          {/*<div>
             <label>Search & Select SKU:</label>
             <Select
               options={options}
@@ -471,7 +471,7 @@ const SyncLogViewer = () => {
             >
               Submit
             </button>
-          </div>
+          </div>*/}
           <div className="flex items-center gap-4">
             <input
               type="text"
